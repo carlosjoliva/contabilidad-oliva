@@ -325,7 +325,7 @@ elif opcion == "Emitir Nota de Crédito":
             iva_nc_calc = round(neto_nc * 0.19, 2)
             total_nc_calc = round(neto_nc + iva_nc_calc, 2)
             
-            st.warning(f"📉 Total Rebaja NC: **Neto: ${neto_nc:,.0f}** | **IVA: ${iva_nc_calc:,.0f}** \vert{} **Total:${total_nc_calc:,.0f}**")
+            st.warning(f"📉 Total Rebaja NC: **Neto: ${neto_nc:,.0f}** | **IVA: ${iva_nc_calc:,.0f}** | **Total:${total_nc_calc:,.0f}**")
             
             sub_nc = st.form_submit_button("Guardar Nota de Crédito")
             if sub_nc:
