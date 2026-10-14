@@ -28,6 +28,22 @@ def init_db():
         )
     ''')
     
+    # Tabla Notas de Crédito
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS notas_credito (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folio_nc INTEGER UNIQUE,
+            folio_factura INTEGER,
+            cliente TEXT,
+            rut TEXT,
+            fecha_emision DATE,
+            neto REAL,
+            iva REAL,
+            total REAL,
+            motivo TEXT
+        )
+    ''')
+    
     # Tabla Compras (Facturas Recibidas)
     c.execute('''
         CREATE TABLE IF NOT EXISTS compras (
@@ -72,25 +88,30 @@ st.markdown("---")
 # Cargar Datos de SQLite
 conn = sqlite3.connect("contabilidad_oliva.db")
 df_ventas = pd.read_sql_query("SELECT * FROM ventas", conn)
+df_nc = pd.read_sql_query("SELECT * FROM notas_credito", conn)
 df_compras = pd.read_sql_query("SELECT * FROM compras", conn)
 conn.close()
 
 # Métricas Principales (KPIs)
 col1, col2, col3, col4 = st.columns(4)
 
+total_nc_neto = df_nc['neto'].sum() if not df_nc.empty else 0.0
+total_nc_iva = df_nc['iva'].sum() if not df_nc.empty else 0.0
+total_nc_bruto = df_nc['total'].sum() if not df_nc.empty else 0.0
+
 plata_en_la_calle = df_ventas[df_ventas['estado_pago'] == 'PENDIENTE']['total'].sum()
-ventas_mes_neto = df_ventas['neto'].sum()
-ventas_mes_bruto = df_ventas['total'].sum()
-iva_debito_total = df_ventas['iva'].sum()
+ventas_mes_neto = df_ventas['neto'].sum() - total_nc_neto
+ventas_mes_bruto = df_ventas['total'].sum() - total_nc_bruto
+iva_debito_total = df_ventas['iva'].sum() - total_nc_iva
 
 with col1:
     st.metric(label="🚨 Plata en la Calle (Pendiente)", value=f"${plata_en_la_calle:,.0f}")
 with col2:
-    st.metric(label="📅 Facturado Neto Mes", value=f"${ventas_mes_neto:,.0f}")
+    st.metric(label="📅 Facturado Neto Efectivo", value=f"${ventas_mes_neto:,.0f}")
 with col3:
     st.metric(label="📈 Total Facturado (Bruto)", value=f"${ventas_mes_bruto:,.0f}")
 with col4:
-    st.metric(label="🏛️ IVA Débito Generado", value=f"${iva_debito_total:,.0f}")
+    st.metric(label="🏛️ IVA Débito (Neto de NC)", value=f"${iva_debito_total:,.0f}")
 
 st.markdown("---")
 
@@ -98,6 +119,7 @@ st.markdown("---")
 opcion = st.sidebar.selectbox("Seleccione un Módulo:", [
     "Dashboard & Ventas",
     "Ingresar Nueva Factura",
+    "Emitir Nota de Crédito",
     "Módulo de Compras & Proveedores",
     "Proyección de IVA y F29 (PPM 2%)",
     "Conciliación con RCV del SII"
@@ -106,7 +128,6 @@ opcion = st.sidebar.selectbox("Seleccione un Módulo:", [
 # Módulo 1: Dashboard y Control de Ventas
 if opcion == "Dashboard & Ventas":
     st.subheader("📋 Registro de Facturas Emitidas (Ventas)")
-    
     st.dataframe(df_ventas, use_container_width=True)
     
     st.subheader("🔴 Facturas Pendientes de Cobro")
@@ -119,7 +140,7 @@ if opcion == "Dashboard & Ventas":
             with col_b:
                 st.write(f"Monto Total: **${row['total']:,.0f}**")
             with col_c:
-                if st.button(f"Marcar Pagada #{row['folio']}", key=row['folio']):
+                if st.button(f"Marcar Pagada #{row['folio']}", key=f"pagar_{row['folio']}"):
                     conn = sqlite3.connect("contabilidad_oliva.db")
                     c = conn.cursor()
                     hoy = datetime.date.today().strftime("%Y-%m-%d")
@@ -130,6 +151,24 @@ if opcion == "Dashboard & Ventas":
                     st.rerun()
     else:
         st.info("¡Excelente! No hay facturas pendientes en la calle.")
+        
+    st.markdown("---")
+    st.subheader("🗑️ Eliminar o Anular Factura por Error")
+    if not df_ventas.empty:
+        col_del1, col_del2 = st.columns([2, 1])
+        with col_del1:
+            folio_eliminar = st.selectbox("Seleccione Folio a Eliminar:", df_ventas['folio'].unique())
+        with col_del2:
+            st.write("")
+            st.write("")
+            if st.button("❌ Eliminar Factura", type="primary"):
+                conn = sqlite3.connect("contabilidad_oliva.db")
+                c = conn.cursor()
+                c.execute("DELETE FROM ventas WHERE folio = ?", (folio_eliminar,))
+                conn.commit()
+                conn.close()
+                st.success(f"Factura N° {folio_eliminar} eliminada con éxito de la base de datos.")
+                st.rerun()
 
 # Módulo 2: Ingreso de Ventas Manuales
 elif opcion == "Ingresar Nueva Factura":
@@ -164,6 +203,59 @@ elif opcion == "Ingresar Nueva Factura":
             st.success(f"Factura N° {folio} registrada correctamente.")
             st.rerun()
 
+# Módulo M: Notas de Crédito
+elif opcion == "Emitir Nota de Crédito":
+    st.subheader("📄 Registro y Emisión de Notas de Crédito")
+    
+    if not df_ventas.empty:
+        with st.form("form_nc"):
+            col_nc1, col_nc2 = st.columns(2)
+            with col_nc1:
+                folio_nc = st.number_input("N° Nota de Crédito", min_value=1, step=1)
+                folio_factura_ref = st.selectbox("Seleccione Factura Afecta (Folio):", df_ventas['folio'].unique())
+                
+                # Datos de la factura seleccionada
+                factura_sel = df_ventas[df_ventas['folio'] == folio_factura_ref].iloc[0]
+                st.caption(f"Cliente: **{factura_sel['cliente']}** | RUT: **{factura_sel['rut']}**")
+                
+                motivo = st.text_input("Motivo / Razon de la NC", value="Anulación o descuento de factura")
+                
+            with col_nc2:
+                fecha_nc = st.date_input("Fecha de Emisión NC", datetime.date.today())
+                neto_nc = st.number_input("Monto Neto a Rebajar ($)", min_value=0.0, max_value=float(factura_sel['neto']), value=float(factura_sel['neto']), step=1000.0)
+                
+            iva_nc_calc = round(neto_nc * 0.19, 2)
+            total_nc_calc = round(neto_nc + iva_nc_calc, 2)
+            
+            st.warning(f"📉 Total Rebaja NC: **Neto: ${neto_nc:,.0f}** | **IVA: ${iva_nc_calc:,.0f}** | **Total: ${total_nc_calc:,.0f}**")
+            
+            sub_nc = st.form_submit_button("Guardar Nota de Crédito")
+            if sub_nc:
+                conn = sqlite3.connect("contabilidad_oliva.db")
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO notas_credito (folio_nc, folio_factura, cliente, rut, fecha_emision, neto, iva, total, motivo)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (folio_nc, folio_factura_ref, factura_sel['cliente'], factura_sel['rut'], str(fecha_nc), neto_nc, iva_nc_calc, total_nc_calc, motivo))
+                
+                # Si la NC es por el total neto de la factura, se actualiza el estado si estaba pendiente
+                if neto_nc >= factura_sel['neto']:
+                    c.execute("UPDATE ventas SET estado_pago = 'ANULADA_NC' WHERE folio = ?", (folio_factura_ref,))
+                    
+                conn.commit()
+                conn.close()
+                st.success(f"Nota de Crédito N° {folio_nc} registrada correctamente.")
+                st.rerun()
+    else:
+        st.info("No existen facturas registradas para emitir notas de crédito.")
+        
+    st.markdown("---")
+    st.subheader("📜 Historico de Notas de Crédito Registradas")
+    if not df_nc.empty:
+        st.dataframe(df_nc, use_container_width=True)
+    else:
+        st.info("No hay notas de crédito registradas.")
+
 # Módulo 3: Proyección Tributaria F29
 elif opcion == "Proyección de IVA y F29 (PPM 2%)":
     st.subheader("🏛️ Simulación y Proyección de F29 en Tiempo Real")
@@ -178,9 +270,11 @@ elif opcion == "Proyección de IVA y F29 (PPM 2%)":
         iva_credito_compras = df_compras['iva'].sum() if not df_compras.empty else 784059.0
         st.write(f"**IVA Crédito Fiscal (Compras registradas):** ${iva_credito_compras:,.0f}")
         
-    # Cálculos F29
-    iva_debito = df_ventas['iva'].sum()
-    ventas_netas = df_ventas['neto'].sum()
+    # Cálculos F29 ajustados con Notas de Crédito
+    iva_debito_bruto = df_ventas['iva'].sum()
+    iva_debito = max(0.0, iva_debito_bruto - total_nc_iva)
+    ventas_netas = max(0.0, df_ventas['neto'].sum() - total_nc_neto)
+    
     ppm_determinado = round(ventas_netas * tasa_ppm)
     
     total_creditos = iva_credito_compras + remanente_anterior
@@ -188,11 +282,13 @@ elif opcion == "Proyección de IVA y F29 (PPM 2%)":
     total_f29 = iva_determinado + ppm_determinado + retenciones
     
     st.markdown("### 📊 Liquidación Estimada F29")
-    st.write(f"(+) IVA Débito Fiscal (Ventas): **${iva_debito:,.0f}**")
+    st.write(f"(+) IVA Débito Fiscal (Ventas): **${iva_debito_bruto:,.0f}**")
+    if total_nc_iva > 0:
+        st.write(f"(-) IVA Rebajado por NC: **-${total_nc_iva:,.0f}**")
     st.write(f"(-) IVA Crédito Fiscal (Compras): **-${iva_credito_compras:,.0f}**")
     st.write(f"(-) Remanente Mes Anterior: **-${remanente_anterior:,.0f}**")
     st.markdown(f"**= IVA Determinado a Pagar: ${iva_determinado:,.0f}**")
-    st.markdown(f"**+ PPM Determinado ({tasa_ppm*100}%): ${ppm_determinado:,.0f}**")
+    st.markdown(f"**+ PPM Determinado ({tasa_ppm*100:.1f}%): ${ppm_determinado:,.0f}**")
     st.markdown(f"**+ Retenciones y Ajustes: ${retenciones:,.0f}**")
     st.subheader(f"💵 Total Líquido a Pagar en F29: ${total_f29:,.0f}")
 
