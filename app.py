@@ -286,7 +286,7 @@ elif opcion == "Ingresar Nueva Factura":
         total_calc = round(neto + iva_calc, 2)
         venc_calc = fecha_emision + datetime.timedelta(days=int(plazo))
         
-        st.info(f"💡 IVA (19%): **${iva_calc:,.0f}** \vert{} Total Bruto: **${total_calc:,.0f}** | Fecha Límite de Pago: **{venc_calc}**")
+        st.info(f"💡 IVA (19%): **${iva_calc:,.0f}** | Total Bruto: **${total_calc:,.0f}** | Fecha Límite de Pago: **{venc_calc}**")
         
         submitted = st.form_submit_button("Guardar Factura")
         if submitted:
