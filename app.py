@@ -161,14 +161,38 @@ if opcion == "Dashboard & Ventas":
         with col_del2:
             st.write("")
             st.write("")
-            if st.button("❌ Eliminar Factura", type="primary"):
-                conn = sqlite3.connect("contabilidad_oliva.db")
-                c = conn.cursor()
-                c.execute("DELETE FROM ventas WHERE folio = ?", (folio_eliminar,))
-                conn.commit()
-                conn.close()
-                st.success(f"Factura N° {folio_eliminar} eliminada con éxito de la base de datos.")
-                st.rerun()
+            if st.button("❌ Solicitar Eliminación", type="primary"):
+                st.session_state['confirmar_eliminacion'] = folio_eliminar
+
+        # Modal / Cuadro de confirmación de seguridad
+        if st.session_state.get('confirmar_eliminacion') == folio_eliminar:
+            st.warning(f"⚠️ ¿Está seguro que desea eliminar la Factura N° **{folio_eliminar}**?")
+            
+            with st.form("form_confirmacion_seguridad"):
+                codigo = st.text_input("Ingrese el código de autorización:", type="password")
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    btn_confirmar = st.form_submit_button("Confirmar Eliminación")
+                with col_c2:
+                    btn_cancelar = st.form_submit_button("Cancelar")
+
+                if btn_confirmar:
+                    if codigo == "2010":
+                        conn = sqlite3.connect("contabilidad_oliva.db")
+                        c = conn.cursor()
+                        c.execute("DELETE FROM ventas WHERE folio = ?", (folio_eliminar,))
+                        conn.commit()
+                        conn.close()
+                        
+                        st.session_state.pop('confirmar_eliminacion', None)
+                        st.success(f"Factura N° {folio_eliminar} eliminada exitosamente.")
+                        st.rerun()
+                    else:
+                        st.error("🔒 Código de autorización incorrecto. No se realizó ninguna acción.")
+                
+                if btn_cancelar:
+                    st.session_state.pop('confirmar_eliminacion', None)
+                    st.rerun()
 
 # Módulo 2: Ingreso de Ventas Manuales
 elif opcion == "Ingresar Nueva Factura":
