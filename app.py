@@ -59,7 +59,7 @@ def init_db():
         )
     ''')
     
-    # Cargar datos iniciales de 2025 si la tabla está vacía
+    # Cargar datos iniciales si la tabla está vacía
     c.execute("SELECT COUNT(*) FROM ventas")
     if c.fetchone()[0] == 0:
         ventas_iniciales = [
@@ -92,17 +92,80 @@ df_nc = pd.read_sql_query("SELECT * FROM notas_credito", conn)
 df_compras = pd.read_sql_query("SELECT * FROM compras", conn)
 conn.close()
 
-# Métricas Principales (KPIs)
+# Cálculo de Fechas de Vencimiento y Estado de Morosidad
+hoy = datetime.date.today()
+
+if not df_ventas.empty:
+    df_ventas['fecha_emision_dt'] = pd.to_datetime(df_ventas['fecha_emision'])
+    df_ventas['fecha_vencimiento_dt'] = df_ventas['fecha_emision_dt'] + pd.to_timedelta(df_ventas['plazo_dias'], unit='D')
+    df_ventas['fecha_vencimiento'] = df_ventas['fecha_vencimiento_dt'].dt.strftime('%Y-%m-%d')
+    df_ventas['dias_mora'] = (pd.to_datetime(hoy) - df_ventas['fecha_vencimiento_dt']).dt.days
+    df_ventas['anio'] = df_ventas['fecha_emision_dt'].dt.year
+    df_ventas['mes'] = df_ventas['fecha_emision_dt'].dt.month
+else:
+    df_ventas['fecha_vencimiento'] = []
+    df_ventas['dias_mora'] = []
+    df_ventas['anio'] = []
+    df_ventas['mes'] = []
+
+if not df_nc.empty:
+    df_nc['fecha_emision_dt'] = pd.to_datetime(df_nc['fecha_emision'])
+    df_nc['anio'] = df_nc['fecha_emision_dt'].dt.year
+    df_nc['mes'] = df_nc['fecha_emision_dt'].dt.month
+
+# Sidebar - Menú Principal y Filtros de Período
+st.sidebar.header("🔍 Navegación y Filtros")
+
+opcion = st.sidebar.selectbox("Seleccione un Módulo:", [
+    "Dashboard & Ventas",
+    "Ingresar Nueva Factura",
+    "Emitir Nota de Crédito",
+    "Módulo de Compras & Proveedores",
+    "Proyección de IVA y F29 (PPM 2%)",
+    "Conciliación con RCV del SII"
+])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Período Tributario")
+
+# Opciones de Filtro de Año y Mes
+anios_disponibles = sorted(list(set(df_ventas['anio'].dropna().astype(int).tolist() + [hoy.year])), reverse=True)
+anio_sel = st.sidebar.selectbox("Año:", ["Todos"] + anios_disponibles, index=1 if len(anios_disponibles)>0 else 0)
+
+meses_nombres = {
+    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+    7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+}
+
+mes_sel_nombre = st.sidebar.selectbox("Mes:", ["Todos"] + list(meses_nombres.values()))
+mes_sel_num = [k for k, v in meses_nombres.items() if v == mes_sel_nombre]
+mes_sel = mes_sel_num[0] if len(mes_sel_num) > 0 else "Todos"
+
+# Aplicación de Filtros a DataFrames
+df_ventas_filtrado = df_ventas.copy()
+df_nc_filtrado = df_nc.copy()
+
+if anio_sel != "Todos":
+    df_ventas_filtrado = df_ventas_filtrado[df_ventas_filtrado['anio'] == int(anio_sel)]
+    if not df_nc_filtrado.empty:
+        df_nc_filtrado = df_nc_filtrado[df_nc_filtrado['anio'] == int(anio_sel)]
+
+if mes_sel != "Todos":
+    df_ventas_filtrado = df_ventas_filtrado[df_ventas_filtrado['mes'] == int(mes_sel)]
+    if not df_nc_filtrado.empty:
+        df_nc_filtrado = df_nc_filtrado[df_nc_filtrado['mes'] == int(mes_sel)]
+
+# Cálculo de Métricas Principales (KPIs)
 col1, col2, col3, col4 = st.columns(4)
 
-total_nc_neto = df_nc['neto'].sum() if not df_nc.empty else 0.0
-total_nc_iva = df_nc['iva'].sum() if not df_nc.empty else 0.0
-total_nc_bruto = df_nc['total'].sum() if not df_nc.empty else 0.0
+total_nc_neto = df_nc_filtrado['neto'].sum() if not df_nc_filtrado.empty else 0.0
+total_nc_iva = df_nc_filtrado['iva'].sum() if not df_nc_filtrado.empty else 0.0
+total_nc_bruto = df_nc_filtrado['total'].sum() if not df_nc_filtrado.empty else 0.0
 
-plata_en_la_calle = df_ventas[df_ventas['estado_pago'] == 'PENDIENTE']['total'].sum()
-ventas_mes_neto = df_ventas['neto'].sum() - total_nc_neto
-ventas_mes_bruto = df_ventas['total'].sum() - total_nc_bruto
-iva_debito_total = df_ventas['iva'].sum() - total_nc_iva
+plata_en_la_calle = df_ventas_filtrado[df_ventas_filtrado['estado_pago'] == 'PENDIENTE']['total'].sum()
+ventas_mes_neto = df_ventas_filtrado['neto'].sum() - total_nc_neto
+ventas_mes_bruto = df_ventas_filtrado['total'].sum() - total_nc_bruto
+iva_debito_total = df_ventas_filtrado['iva'].sum() - total_nc_iva
 
 with col1:
     st.metric(label="🚨 Plata en la Calle (Pendiente)", value=f"${plata_en_la_calle:,.0f}")
@@ -115,42 +178,52 @@ with col4:
 
 st.markdown("---")
 
-# Menú Principal
-opcion = st.sidebar.selectbox("Seleccione un Módulo:", [
-    "Dashboard & Ventas",
-    "Ingresar Nueva Factura",
-    "Emitir Nota de Crédito",
-    "Módulo de Compras & Proveedores",
-    "Proyección de IVA y F29 (PPM 2%)",
-    "Conciliación con RCV del SII"
-])
-
 # Módulo 1: Dashboard y Control de Ventas
 if opcion == "Dashboard & Ventas":
-    st.subheader("📋 Registro de Facturas Emitidas (Ventas)")
-    st.dataframe(df_ventas, use_container_width=True)
+    st.subheader(f"📋 Registro de Facturas Emitidas - Período: {mes_sel_nombre} / {anio_sel}")
     
-    st.subheader("🔴 Facturas Pendientes de Cobro")
-    df_pendientes = df_ventas[df_ventas['estado_pago'] == 'PENDIENTE']
+    # Selección y orden de columnas para presentación
+    cols_visibles = ['id', 'folio', 'cliente', 'rut', 'fecha_emision', 'plazo_dias', 'fecha_vencimiento', 'fecha_pago', 'neto', 'iva', 'total', 'estado_pago']
+    cols_existentes = [c for c in cols_visibles if c in df_ventas_filtrado.columns]
+    st.dataframe(df_ventas_filtrado[cols_existentes], use_container_width=True)
+    
+    st.subheader("🔴 Control de Cobranza y Alertas de Vencimiento")
+    df_pendientes = df_ventas_filtrado[df_ventas_filtrado['estado_pago'] == 'PENDIENTE']
+    
     if not df_pendientes.empty:
         for idx, row in df_pendientes.iterrows():
-            col_a, col_b, col_c = st.columns([3, 2, 2])
-            with col_a:
-                st.write(f"**Factura N° {row['folio']}** - {row['cliente']} (RUT: {row['rut']})")
-            with col_b:
-                st.write(f"Monto Total: **${row['total']:,.0f}**")
-            with col_c:
-                if st.button(f"Marcar Pagada #{row['folio']}", key=f"pagar_{row['folio']}"):
-                    conn = sqlite3.connect("contabilidad_oliva.db")
-                    c = conn.cursor()
-                    hoy = datetime.date.today().strftime("%Y-%m-%d")
-                    c.execute("UPDATE ventas SET estado_pago = 'PAGADO', fecha_pago = ? WHERE folio = ?", (hoy, row['folio']))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"Factura #{row['folio']} actualizada a PAGADA.")
-                    st.rerun()
+            mora = row['dias_mora']
+            vencida = mora > 0
+            
+            # Etiqueta de estado
+            if vencida:
+                titulo_expander = f"🚨 VENCIDA ({mora} días de mora) | Factura N° {row['folio']} - {row['cliente']} | Total: ${row['total']:,.0f}"
+            else:
+                titulo_expander = f"⏳ En Plazo ({abs(mora)} días restantes) | Factura N° {row['folio']} - {row['cliente']} | Total: ${row['total']:,.0f}"
+                
+            with st.expander(titulo_expander):
+                col_p1, col_p2 = st.columns([2, 2])
+                with col_p1:
+                    st.write(f"**RUT Cliente:** {row['rut']}")
+                    st.write(f"**Fecha Emisión:** {row['fecha_emision']} ({row['plazo_dias']} días plazo)")
+                    st.write(f"**Fecha Límite Pago (Vencimiento):** `{row['fecha_vencimiento']}`")
+                    st.write(f"**Monto Bruto:** ${row['total']:,.0f}")
+                    if vencida:
+                        st.error(f"⚠️ Alerta: Esta factura debía cancelarse el {row['fecha_vencimiento']}.")
+                with col_p2:
+                    st.markdown("#### 💵 Registrar Cancelación Deuda")
+                    fecha_cancelacion_input = st.date_input(f"Fecha Real de Cancelación (Folio #{row['folio']})", hoy, key=f"f_canc_{row['folio']}")
+                    
+                    if st.button(f"Confirmar Cancelación #{row['folio']}", key=f"btn_pagar_{row['folio']}"):
+                        conn = sqlite3.connect("contabilidad_oliva.db")
+                        c = conn.cursor()
+                        c.execute("UPDATE ventas SET estado_pago = 'PAGADO', fecha_pago = ? WHERE folio = ?", (str(fecha_cancelacion_input), row['folio']))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"Factura #{row['folio']} cancelada exitosamente el {fecha_cancelacion_input}.")
+                        st.rerun()
     else:
-        st.info("¡Excelente! No hay facturas pendientes en la calle.")
+        st.info("¡Excelente! No hay facturas pendientes registradas en este período.")
         
     st.markdown("---")
     st.subheader("🗑️ Eliminar o Anular Factura por Error")
@@ -205,14 +278,15 @@ elif opcion == "Ingresar Nueva Factura":
             cliente = st.text_input("Razón Social del Cliente")
             rut = st.text_input("RUT Cliente (ej: 76.487.820-5)")
         with col_f2:
-            fecha_emision = st.date_input("Fecha de Emisión", datetime.date.today())
+            fecha_emision = st.date_input("Fecha de Emisión", hoy)
             plazo = st.number_input("Plazo de Pago (Días)", min_value=0, value=30)
             neto = st.number_input("Monto Neto ($)", min_value=0.0, step=1000.0)
             
         iva_calc = round(neto * 0.19, 2)
         total_calc = round(neto + iva_calc, 2)
+        venc_calc = fecha_emision + datetime.timedelta(days=int(plazo))
         
-        st.info(f"💡 IVA (19%): **${iva_calc:,.0f}** | Total Bruto: **${total_calc:,.0f}**")
+        st.info(f"💡 IVA (19%): **${iva_calc:,.0f}** \vert{} Total Bruto: **${total_calc:,.0f}** | Fecha Límite de Pago: **{venc_calc}**")
         
         submitted = st.form_submit_button("Guardar Factura")
         if submitted:
@@ -245,13 +319,13 @@ elif opcion == "Emitir Nota de Crédito":
                 motivo = st.text_input("Motivo / Razon de la NC", value="Anulación o descuento de factura")
                 
             with col_nc2:
-                fecha_nc = st.date_input("Fecha de Emisión NC", datetime.date.today())
+                fecha_nc = st.date_input("Fecha de Emisión NC", hoy)
                 neto_nc = st.number_input("Monto Neto a Rebajar ($)", min_value=0.0, max_value=float(factura_sel['neto']), value=float(factura_sel['neto']), step=1000.0)
                 
             iva_nc_calc = round(neto_nc * 0.19, 2)
             total_nc_calc = round(neto_nc + iva_nc_calc, 2)
             
-            st.warning(f"📉 Total Rebaja NC: **Neto: ${neto_nc:,.0f}** | **IVA: ${iva_nc_calc:,.0f}** | **Total: ${total_nc_calc:,.0f}**")
+            st.warning(f"📉 Total Rebaja NC: **Neto: ${neto_nc:,.0f}** | **IVA: ${iva_nc_calc:,.0f}** \vert{} **Total:${total_nc_calc:,.0f}**")
             
             sub_nc = st.form_submit_button("Guardar Nota de Crédito")
             if sub_nc:
@@ -262,7 +336,7 @@ elif opcion == "Emitir Nota de Crédito":
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (folio_nc, folio_factura_ref, factura_sel['cliente'], factura_sel['rut'], str(fecha_nc), neto_nc, iva_nc_calc, total_nc_calc, motivo))
                 
-                # Si la NC es por el total neto de la factura, se actualiza el estado si estaba pendiente
+                # Si la NC es por el total neto de la factura, se actualiza el estado
                 if neto_nc >= factura_sel['neto']:
                     c.execute("UPDATE ventas SET estado_pago = 'ANULADA_NC' WHERE folio = ?", (folio_factura_ref,))
                     
@@ -274,7 +348,7 @@ elif opcion == "Emitir Nota de Crédito":
         st.info("No existen facturas registradas para emitir notas de crédito.")
         
     st.markdown("---")
-    st.subheader("📜 Historico de Notas de Crédito Registradas")
+    st.subheader("📜 Histórico de Notas de Crédito Registradas")
     if not df_nc.empty:
         st.dataframe(df_nc, use_container_width=True)
     else:
@@ -282,7 +356,7 @@ elif opcion == "Emitir Nota de Crédito":
 
 # Módulo 3: Proyección Tributaria F29
 elif opcion == "Proyección de IVA y F29 (PPM 2%)":
-    st.subheader("🏛️ Simulación y Proyección de F29 en Tiempo Real")
+    st.subheader(f"🏛️ Simulación y Proyección de F29 - Período: {mes_sel_nombre} / {anio_sel}")
     
     col_p1, col_p2 = st.columns(2)
     with col_p1:
@@ -294,10 +368,10 @@ elif opcion == "Proyección de IVA y F29 (PPM 2%)":
         iva_credito_compras = df_compras['iva'].sum() if not df_compras.empty else 784059.0
         st.write(f"**IVA Crédito Fiscal (Compras registradas):** ${iva_credito_compras:,.0f}")
         
-    # Cálculos F29 ajustados con Notas de Crédito
-    iva_debito_bruto = df_ventas['iva'].sum()
+    # Cálculos F29 ajustados con Notas de Crédito y Filtro de Período
+    iva_debito_bruto = df_ventas_filtrado['iva'].sum()
     iva_debito = max(0.0, iva_debito_bruto - total_nc_iva)
-    ventas_netas = max(0.0, df_ventas['neto'].sum() - total_nc_neto)
+    ventas_netas = max(0.0, df_ventas_filtrado['neto'].sum() - total_nc_neto)
     
     ppm_determinado = round(ventas_netas * tasa_ppm)
     
